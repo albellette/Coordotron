@@ -83,7 +83,7 @@
   header.top .titles p.sub { color: var(--ink-600); font-size: .92rem; }
 
   .session-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  select, input[type=text], input[type=number] {
+  select, input[type=text], input[type=number], input[type=date] {
     font-family: var(--font-body); font-size: .88rem; color: var(--ink-900);
     background: var(--surface); border: 1px solid var(--border);
     border-radius: var(--radius-sm); padding: 7px 10px;
@@ -211,7 +211,7 @@
 
   .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
   .table-wrap .scroll { overflow-x: auto; }
-  .table-wrap table.list { min-width: 480px; }
+  .table-wrap table.list { min-width: 560px; }
   .section-title { display:flex; align-items:center; gap:8px; margin: 22px 0 8px; }
   .section-title .n { font-family: var(--font-mono); font-size: .72rem; color: var(--ink-400); }
 
@@ -359,14 +359,24 @@
     (children || []).forEach(function (c) { if (c) node.appendChild(c); });
     return node;
   }
+  function todayStr() {
+    var d = new Date();
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+  function parseAnyDate(iso) {
+    if (!iso) return null;
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+    if (m) return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10));
+    return new Date(iso);
+  }
   function fmtDate(iso) {
     if (!iso) return null;
-    try { return new Intl.DateTimeFormat("fr-CA", { year: "numeric", month: "long", day: "numeric" }).format(new Date(iso)); }
+    try { return new Intl.DateTimeFormat("fr-CA", { year: "numeric", month: "long", day: "numeric" }).format(parseAnyDate(iso)); }
     catch (e) { return iso; }
   }
   function fmtDateShort(iso) {
     if (!iso) return null;
-    try { return new Intl.DateTimeFormat("fr-CA", { year: "numeric", month: "short", day: "numeric" }).format(new Date(iso)); }
+    try { return new Intl.DateTimeFormat("fr-CA", { year: "numeric", month: "short", day: "numeric" }).format(parseAnyDate(iso)); }
     catch (e) { return iso; }
   }
   function initials(name) {
@@ -413,6 +423,15 @@
     var list = state.assignments.filter(function (a) { return a.committee === committeeId; });
     if (!list.length) return null;
     return list.reduce(function (m, a) { return (!m || a.assignedAt > m.assignedAt) ? a : m; }, null);
+  }
+
+  // Meeting numbers count up per committee, within the current session, and
+  // are never reused (based on the highest number seen, not a row count) so
+  // deleting a mistaken entry doesn't shift the numbering of later ones.
+  function nextMeetingNumber(committeeId) {
+    var relevant = state.assignments.filter(function (a) { return a.committee === committeeId && a.sessionId === state.currentSessionId; });
+    var max = relevant.reduce(function (m, a) { return Math.max(m, a.meetingNumber || 0); }, 0);
+    return max + 1;
   }
 
   // ---------- render: session bar + summary ----------
@@ -512,7 +531,7 @@
       lastRow.appendChild(el("div", { class: "avatar", text: initials(lastGlobal.teacherName || (t ? t.name : "?")) }));
       var metaWrap = el("div");
       metaWrap.appendChild(el("div", { class: "name", text: lastGlobal.teacherName || (t ? t.name : "Enseignant·e retiré·e") }));
-      metaWrap.appendChild(el("div", { class: "meta", text: "Dernier·ère rédacteur·rice · " + fmtDate(lastGlobal.assignedAt) + (s ? " · " + s.label : "") }));
+      metaWrap.appendChild(el("div", { class: "meta", text: "Dernier·ère rédacteur·rice · " + (lastGlobal.meetingNumber ? "Réunion #" + lastGlobal.meetingNumber + " · " : "") + fmtDate(lastGlobal.assignedAt) + (s ? " · " + s.label : "") }));
       lastRow.appendChild(metaWrap);
     } else {
       lastRow.appendChild(el("span", { class: "empty", text: "Aucun procès-verbal enregistré pour ce comité pour l'instant." }));
@@ -523,13 +542,17 @@
       var candidateEntry = roster.find(function (r) { return r.teacher.id === sugg.teacherId; });
       if (candidateEntry) {
         var box = el("div", { class: "suggest-box" });
-        box.appendChild(el("div", { class: "label", text: "Proposition pour la prochaine réunion" }));
+        box.appendChild(el("div", { class: "label", text: "Proposition pour la réunion #" + sugg.number }));
         box.appendChild(el("div", { class: "who", text: candidateEntry.teacher.name }));
         var why = candidateEntry.sessionCount === 0 ? "N'a pas encore rédigé cette session-ci." : candidateEntry.sessionCount + " fois cette session-ci.";
         why += candidateEntry.lastAt ? " Dernière fois : " + fmtDateShort(candidateEntry.lastAt) + "." : " Jamais désigné·e auparavant.";
         box.appendChild(el("div", { class: "why", text: why }));
+        var dateRow = el("div", { style: "display:flex; align-items:center; gap:8px; margin-bottom:10px;" });
+        dateRow.appendChild(el("label", { text: "Date de la réunion", style: "font-size:.78rem; color:var(--ink-600);" }));
+        dateRow.appendChild(el("input", { type: "date", value: sugg.date, oninput: function (e) { sugg.date = e.target.value; } }));
+        box.appendChild(dateRow);
         var actions = el("div", { class: "actions" });
-        actions.appendChild(el("button", { class: "btn btn-primary btn-sm", text: "Confirmer l'attribution", onclick: function () { confirmAssignment(committeeId, candidateEntry.teacher); } }));
+        actions.appendChild(el("button", { class: "btn btn-primary btn-sm", text: "Confirmer l'attribution", onclick: function () { confirmAssignment(committeeId, candidateEntry.teacher, sugg.date, sugg.number); } }));
         actions.appendChild(el("button", { class: "btn btn-sm", text: "Indisponible → suivant", onclick: function () { skipSuggestion(committeeId); } }));
         actions.appendChild(el("button", { class: "btn btn-ghost btn-sm", text: "Annuler", onclick: function () { state.suggestions[committeeId] = null; render(); } }));
         box.appendChild(actions);
@@ -541,7 +564,7 @@
         class: "btn btn-primary", text: "Désigner le prochain·la prochaine",
         style: "width:100%; justify-content:center; margin-bottom:14px;",
         disabled: canSuggest ? null : "disabled",
-        onclick: function () { state.suggestions[committeeId] = { teacherId: roster[0].teacher.id, skipped: [] }; render(); }
+        onclick: function () { state.suggestions[committeeId] = { teacherId: roster[0].teacher.id, skipped: [], date: todayStr(), number: nextMeetingNumber(committeeId) }; render(); }
       }));
     }
 
@@ -581,11 +604,12 @@
     render();
   }
 
-  function confirmAssignment(committeeId, teacher) {
+  function confirmAssignment(committeeId, teacher, meetingDate, meetingNumber) {
     if (!state.db || !state.currentSessionId) return;
     state.db.collection("assignments").add({
       sessionId: state.currentSessionId, committee: committeeId, teacherId: teacher.id,
-      teacherName: teacher.name, assignedAt: new Date().toISOString(), isExample: false
+      teacherName: teacher.name, assignedAt: meetingDate || todayStr(),
+      meetingNumber: meetingNumber || nextMeetingNumber(committeeId), isExample: false
     });
     state.suggestions[committeeId] = null;
   }
@@ -746,7 +770,7 @@
     var tableWrap = el("div", { class: "table-wrap" });
     var scroll = el("div", { class: "scroll" });
     var table = el("table", { class: "list" });
-    table.appendChild(el("thead", {}, [el("tr", {}, [el("th", { text: "Date" }), el("th", { text: "Session" }), el("th", { text: "Comité" }), el("th", { text: "Enseignant·e" }), el("th", { text: "" })])]));
+    table.appendChild(el("thead", {}, [el("tr", {}, [el("th", { text: "Date" }), el("th", { text: "Session" }), el("th", { text: "Comité" }), el("th", { text: "Réunion" }), el("th", { text: "Enseignant·e" }), el("th", { text: "" })])]));
     var tbody = el("tbody");
     rows.forEach(function (a) {
       var s = sessionById(a.sessionId);
@@ -754,6 +778,7 @@
       tr.appendChild(el("td", { class: "mono", text: fmtDateShort(a.assignedAt) }));
       tr.appendChild(el("td", { text: s ? s.label : "—" }));
       tr.appendChild(el("td", {}, [el("span", { class: "badge " + (a.committee === "programme" ? "badge-programme" : "badge-departementale"), text: a.committee === "programme" ? "Programme" : "Départementale" })]));
+      tr.appendChild(el("td", { class: "mono", text: a.meetingNumber ? "#" + a.meetingNumber : "—" }));
       tr.appendChild(el("td", { text: a.teacherName }));
       tr.appendChild(el("td", {}, [confirmButton("del-assign-" + a.id, "Supprimer", function () { state.db.doc("assignments/" + a.id).delete(); })]));
       tbody.appendChild(tr);
@@ -806,7 +831,7 @@
       if (!row) return row;
       if (collName === "teachers") return { name: row.name, comiteProgramme: row.comite_programme, active: row.active, isExample: row.is_example, createdAt: row.created_at };
       if (collName === "sessions") return { label: row.label, term: row.term, year: row.year, createdAt: row.created_at };
-      if (collName === "assignments") return { sessionId: row.session_id, committee: row.committee, teacherId: row.teacher_id, teacherName: row.teacher_name, assignedAt: row.assigned_at, isExample: row.is_example };
+      if (collName === "assignments") return { sessionId: row.session_id, committee: row.committee, teacherId: row.teacher_id, teacherName: row.teacher_name, assignedAt: row.assigned_at, meetingNumber: row.meeting_number, isExample: row.is_example };
       if (collName === "meta") return { currentSessionId: row.current_session_id };
     }
     // Only maps keys actually present in `data` — this makes update() a real
@@ -824,7 +849,8 @@
         put("label", "label"); put("term", "term"); put("year", "year"); put("createdAt", "created_at");
       } else if (collName === "assignments") {
         put("sessionId", "session_id"); put("committee", "committee"); put("teacherId", "teacher_id");
-        put("teacherName", "teacher_name"); put("assignedAt", "assigned_at"); put("isExample", "is_example", function (v) { return !!v; });
+        put("teacherName", "teacher_name"); put("assignedAt", "assigned_at"); put("meetingNumber", "meeting_number");
+        put("isExample", "is_example", function (v) { return !!v; });
       } else if (collName === "meta") {
         put("currentSessionId", "current_session_id");
       }
